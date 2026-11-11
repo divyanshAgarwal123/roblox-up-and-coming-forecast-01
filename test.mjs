@@ -1,0 +1,56 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {forecast as predict,score,cleanHistory} from './forecast.ts';
+const H=3_600_000, epoch=Date.parse('2026-01-01T00:00:00Z');
+const chart=(rotation=0)=>Array.from({length:25},(_,i)=>({rank:i+1,universe_id:1000+(i+rotation)%25,playing:10000-i*100}));
+const history=Array.from({length:24},(_,i)=>({at:new Date(epoch+i*6*H).toISOString(),up_and_coming:chart(Math.floor(i/8))}));
+const cutoff=epoch+144*H;
+const task={history_until:new Date(cutoff).toISOString(),window:{from:new Date(cutoff).toISOString(),until:new Date(cutoff+72*H).toISOString(),slots:72,slot_minutes:60},places:10,output:'forecast.json'};
+
+test('all place distributions obey the public output contract',()=>{
+ const f=predict(history,task);
+ assert.deepEqual(Object.keys(f),['probabilities','top10']);
+ assert.equal(f.top10.length,10);assert.equal(new Set(f.top10).size,10);
+ for(let k=1;k<=10;k++) {
+  const rows=f.probabilities.filter(r=>r.place===k);
+  assert.ok(rows.length<=100);assert.equal(rows.length,new Set(rows.map(r=>r.universe_id)).size);
+  assert.ok(rows.reduce((s,r)=>s+r.p,0)<=1);
+  assert.ok(rows.every(r=>Number.isSafeInteger(r.universe_id)&&Number.isFinite(r.p)&&r.p>=0&&r.p<=1));
+ }
+ const mass=new Map();
+ for(const row of f.probabilities) mass.set(row.universe_id,(mass.get(row.universe_id)??0)+row.p);
+ assert.ok([...mass.values()].every(p=>p<=1+1e-12));
+});
+
+test('forecast is deterministic and future rows cannot change it',()=>{
+ const expected=JSON.stringify(predict(history,task));
+ assert.equal(JSON.stringify(predict(history,task)),expected);
+ const future={at:new Date(cutoff).toISOString(),up_and_coming:chart(15)};
+ assert.equal(JSON.stringify(predict([...history,future],task)),expected);
+});
+
+test('game identifiers carry no predictive information',()=>{
+ const shifted=history.map(s=>({...s,up_and_coming:s.up_and_coming.map(r=>({...r,universe_id:r.universe_id+1_000_000}))}));
+ const a=predict(history,task),b=predict(shifted,task);
+ assert.deepEqual(b.top10,a.top10.map(id=>id+1_000_000));
+ assert.deepEqual(b.probabilities,a.probabilities.map(r=>({...r,universe_id:r.universe_id+1_000_000})));
+});
+
+test('scorer distributes unnamed probability only over unnamed chart games',()=>{
+ const f={probabilities:[{universe_id:1000,place:1,p:0.5}],top10:chart().slice(0,10).map(r=>r.universe_id)};
+ const result=score(f,[{at:new Date(epoch).toISOString(),up_and_coming:chart()}]);
+ assert.ok(Math.abs(result.logScore-(Math.log(0.5)+9*Math.log(1/25)))<1e-10);
+ assert.equal(result.hits,10);assert.equal(result.agreement,100);
+});
+
+test('missing history fails explicitly and a one-snapshot history has a forecast',()=>{
+ assert.throws(()=>predict([],task),/No valid/);
+ assert.equal(predict([history[0]],task).top10.length,10);
+});
+
+test('duplicate rows, bad dates and failed reads are sanitized',()=>{
+ const input=[{at:'invalid',up_and_coming:chart()},{...history[0],ok:false},history[1],
+              {...history[2],up_and_coming:[...chart(),chart()[0]]}];
+ const clean=cleanHistory(input,cutoff);
+ assert.equal(clean.length,2);assert.equal(clean[1].up_and_coming.length,25);
+});
