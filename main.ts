@@ -1,6 +1,7 @@
 import {readFileSync,writeFileSync,mkdirSync} from 'node:fs';
 import {join} from 'node:path';
-import {forecast as makeForecast,type Snapshot,type Task} from './forecast.ts';
+import {type Snapshot,type Task} from './forecast.ts';
+import {forecast as makeForecast} from './dynamics.ts';
 
 const input=process.env.MAKEFUN_INPUT_DIR??'/input';
 const output=process.env.MAKEFUN_OUTPUT_DIR??'/output';

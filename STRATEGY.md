@@ -1,29 +1,33 @@
 # Strategy
 
 The target is mean log probability over ten places and all reads in a future
-window. A single confident ordering is fragile: a changed place incurs the log
-floor. The model therefore forecasts distributions and reserves probability for
-games absent from the current candidate set.
+window. A confident fixed ordering is fragile, so Rank Tide estimates full
+place distributions and reserves probability for future releases.
 
-Only strictly pre-cutoff snapshots enter estimation. All analogues and momentum
-features are constructed from that prefix, with momentum at an analogue's origin
-computed only from earlier reads. Future records present in an input are excluded.
-Historical analogue outcomes are always earlier than the forecast cutoff.
+Only strictly pre-cutoff snapshots enter estimation. Recent log-rank velocities
+are estimated by exponentially weighted regression, with shrinkage for very
+short observation spans. Extrapolation is damped after 36 hours. Independent
+simulations of latent rank include increasing uncertainty and a broad-tail
+mixture, then sort all current games to produce coherent rankings.
 
-The ensemble uses three fixed configurations rather than selecting the best
-configuration on the small, overlapping development windows. It integrates
-historical transition intervals across the whole requested horizon. Rank and
-player-growth similarities are regularized by a persistence kernel, broad tails
-and an unnamed-game share. Time-exposure weights correct the change from sparse
-archive reads to hourly recordings.
+Newcomer arrival patterns come from historical origin/outcome pairs, both
+strictly before the cutoff. Patterns are matched to forecast horizon and
+weighted by recency and time exposure. Their unseen games occupy positions in
+the simulated future chart; current games fill the remaining positions.
 
-The model reads no external file beyond the two task inputs and its own source.
-It makes no network requests and has no hardcoded universe IDs. Its game-ID
-equivariance test verifies that renaming all identities preserves probabilities.
-Long histories are deterministically reduced to at most 160 observations spanning
-the full supplied period, including the latest observation.
+Four equally weighted components span 18, 36 and 60-hour trend memories and two
+noise scales. Each runs 24,000 seeded simulations over the full forecast window.
+A diffuse floor smooths simulation error. Output probabilities are capped to
+respect both each place's budget and each game's total membership probability.
 
-The server will run the same program again on the history up to the competition
-deadline. The practice top ten is not submitted as a fixed forecast for the final
-window. Final results, eligibility against the strongest house entry, and any
-prize remain unknown until the actual future chart observations are scored.
+The model reads only the task inputs and its own source, makes no network or
+model calls, and has no hardcoded universe IDs. Game-ID equivariance, fixed
+seeds and exclusion of future input rows are tested. Long histories are reduced
+deterministically to at most 160 observations spanning the supplied period.
+
+The old analogue model remains in forecast.ts for the reproducible comparisons
+in validate.mjs; main.ts executes the new simulation ensemble in dynamics.ts.
+The four overlapping development windows informed model choices and are not
+independent validation. The server reruns the program on the final pre-deadline
+history. Final results, house-baseline eligibility and any prize remain unknown
+until the actual future chart is scored.

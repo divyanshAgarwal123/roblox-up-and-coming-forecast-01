@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {forecast as predict,score,cleanHistory} from './forecast.ts';
+import {score,cleanHistory} from './forecast.ts';
+import {forecast as predict,dynamicForecast,DYNAMICS} from './dynamics.ts';
 const H=3_600_000, epoch=Date.parse('2026-01-01T00:00:00Z');
 const chart=(rotation=0)=>Array.from({length:25},(_,i)=>({rank:i+1,universe_id:1000+(i+rotation)%25,playing:10000-i*100}));
 const history=Array.from({length:24},(_,i)=>({at:new Date(epoch+i*6*H).toISOString(),up_and_coming:chart(Math.floor(i/8))}));
@@ -53,4 +54,23 @@ test('duplicate rows, bad dates and failed reads are sanitized',()=>{
               {...history[2],up_and_coming:[...chart(),chart()[0]]}];
  const clean=cleanHistory(input,cutoff);
  assert.equal(clean.length,2);assert.equal(clean[1].up_and_coming.length,25);
+});
+
+test('joint simulations move probability toward a rising game',()=>{
+ const input=Array.from({length:8},(_,i)=>{
+  const ids=Array.from({length:24},(_,k)=>1000+k);ids.splice(15-i*2,0,999);
+  return {at:new Date(epoch+i*6*H).toISOString(),
+   up_and_coming:ids.map((id,k)=>({rank:k+1,universe_id:id}))};
+ });
+ const ftask={...task,history_until:new Date(epoch+48*H).toISOString(),
+  window:{from:new Date(epoch+48*H).toISOString(),until:new Date(epoch+72*H).toISOString()}};
+ const moving=dynamicForecast(input,ftask,{...DYNAMICS,samples:5000,noise:0.5});
+ const staticForecast=dynamicForecast(input,ftask,{...DYNAMICS,samples:5000,noise:0.5,momentum:0});
+ const first=f=>f.probabilities.find(r=>r.universe_id===999&&r.place===1).p;
+ assert.ok(first(moving)>first(staticForecast));
+});
+
+test('forecast horizons must be positive and finite',()=>{
+ assert.throws(()=>predict(history,{...task,window:{from:task.window.from,until:task.window.from}}),/Invalid/);
+ assert.throws(()=>predict(history,{...task,window:{from:'bad',until:task.window.until}}),/Invalid/);
 });
