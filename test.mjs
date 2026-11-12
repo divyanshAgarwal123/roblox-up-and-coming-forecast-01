@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {score,cleanHistory} from './forecast.ts';
-import {forecast as predict,dynamicForecast,DYNAMICS} from './dynamics.ts';
+import {enhancedForecast as predict,dynamicForecast,DYNAMICS} from './dynamics.ts';
+import {marketSignals} from './features.ts';
 const H=3_600_000, epoch=Date.parse('2026-01-01T00:00:00Z');
 const chart=(rotation=0)=>Array.from({length:25},(_,i)=>({rank:i+1,universe_id:1000+(i+rotation)%25,playing:10000-i*100}));
 const history=Array.from({length:24},(_,i)=>({at:new Date(epoch+i*6*H).toISOString(),up_and_coming:chart(Math.floor(i/8))}));
@@ -73,4 +74,33 @@ test('joint simulations move probability toward a rising game',()=>{
 test('forecast horizons must be positive and finite',()=>{
  assert.throws(()=>predict(history,{...task,window:{from:task.window.from,until:task.window.from}}),/Invalid/);
  assert.throws(()=>predict(history,{...task,window:{from:'bad',until:task.window.until}}),/Invalid/);
+});
+
+test('relative player growth helps a flat-ranked breakout',()=>{
+ const input=Array.from({length:8},(_,i)=>({
+  at:new Date(epoch+i*6*H).toISOString(),
+  up_and_coming:chart().map((r,k)=>({...r,playing:k===6?1000*Math.exp(i*0.3):1000})),
+ }));
+ const ftask={...task,history_until:new Date(epoch+48*H).toISOString(),
+  window:{from:new Date(epoch+48*H).toISOString(),until:new Date(epoch+72*H).toISOString()}};
+ const a=dynamicForecast(input,ftask,{...DYNAMICS,samples:5000,noise:0.5,growth:1});
+ const b=dynamicForecast(input,ftask,{...DYNAMICS,samples:5000,noise:0.5,growth:0});
+ const mass=f=>f.probabilities.filter(r=>r.universe_id===1006&&r.place<=3).reduce((s,r)=>s+r.p,0);
+ assert.ok(mass(a)>mass(b));
+});
+
+test('auxiliary charts are ID-equivariant and missing player counts stay finite',()=>{
+ const input=history.slice(-8).map(s=>({...s,
+  top_trending:s.up_and_coming.slice(0,15).map((r,i)=>({...r,rank:15-i})),
+  up_and_coming:s.up_and_coming.map((r,i)=>({...r,playing:i%3===0?null:r.playing})),
+ }));
+ const shifted=input.map(s=>({...s,
+  up_and_coming:s.up_and_coming.map(r=>({...r,universe_id:r.universe_id+1000000})),
+  top_trending:s.top_trending.map(r=>({...r,universe_id:r.universe_id+1000000})),
+ }));
+ const a=marketSignals(input),b=marketSignals(shifted);
+ for(const [id,x] of a) {
+  assert.deepEqual(b.get(id+1000000),x);
+  assert.ok(Object.values(x).every(Number.isFinite));
+ }
 });

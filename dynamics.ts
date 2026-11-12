@@ -1,16 +1,21 @@
 import {cleanHistory, type Snapshot, type Task, type Forecast} from './forecast.ts';
+import {marketSignals,type Signals} from './features.ts';
+import {fittedDrift} from './regression.ts';
 
 const HOUR=3_600_000;
 const clip=(x:number,a:number,b:number)=>Math.max(a,Math.min(b,x));
 export interface DynamicsConfig {
   momentum:number; memory:number; damping:number; noise:number;
   tail:number; newcomers:number; samples:number; offset:number;
+  growth?:number; audience?:number; burnout?:number; trending?:number;
+  reversion?:number;
+  learned?:number; ridge?:number;
 }
 export const DYNAMICS:DynamicsConfig={
   momentum:1,memory:18,damping:36,noise:1.1,
   tail:0.15,newcomers:1,samples:24000,offset:0.5,
 };
-interface Candidate {id:number;rank:number;velocity:number;age:number}
+interface Candidate {id:number;rank:number;velocity:number;age:number;signals:Signals}
 interface Arrival {hours:number;weight:number;mask:boolean[]}
 
 // The seed never depends on game identifiers or wall time. A fixed sequence makes
@@ -84,9 +89,12 @@ export function dynamicForecast(input:Snapshot[],task:Task,config:DynamicsConfig
   const duration=(Date.parse(task.window.until)-Date.parse(task.window.from))/HOUR;
   if(task.places!==10 || !Number.isFinite(start) || !Number.isFinite(duration) || duration<=0)
     throw new Error('Invalid forecast task');
+  const signals=marketSignals(history,36);
+  const fitted=config.learned ? fittedDrift(history,config.ridge??0.08).drifts : null;
   const candidates:Candidate[]=latest.up_and_coming.slice(0,100).map(r=>({
     id:r.universe_id,rank:r.rank,velocity:velocity(history,r.universe_id,config.memory,config.offset),
     age:(now-Date.parse(history.find(s=>s.up_and_coming.some(x=>x.universe_id===r.universe_id))!.at))/HOUR,
+    signals:signals.get(r.universe_id)!,
   }));
   const rng=randomSource(), arrivals=arrivalPatterns(history);
   const counts=Array.from({length:10},()=>new Array(candidates.length).fill(0));
@@ -103,7 +111,15 @@ export function dynamicForecast(input:Snapshot[],task:Task,config:DynamicsConfig
     const order=candidates.map((c,index)=>{
       const spread=rng.uniform()<config.tail ? 1.8 : 1;
       const z=rng.normal();
-      return {index,value:Math.log(c.rank+config.offset)+config.momentum*c.velocity*projected+sigma*spread*z};
+      const extra=-(config.growth??0)*c.signals.growth
+        -(config.audience??0)*c.signals.audience
+        +(config.burnout??0)*c.signals.burnout
+        -(config.trending??0)*c.signals.trending
+        +(config.reversion??0)*(2.3-Math.log(c.rank+config.offset));
+      const mechanical=config.momentum*c.velocity+extra;
+      const drift=fitted ? (1-config.learned!)*mechanical+config.learned!*(fitted.get(c.id)??mechanical) : mechanical;
+      return {index,value:Math.log(c.rank+config.offset)
+        +drift*projected+sigma*spread*z};
     }).sort((a,b)=>a.value-b.value || a.index-b.index);
     const mask=buckets[Math.min(23,Math.floor(q*24))][Math.floor(rng.uniform()*128)];
     let n=0;
@@ -152,6 +168,24 @@ export function forecast(input:Snapshot[],task:Task):Forecast {
   for(const config of configs) for(const row of dynamicForecast(input,task,config).probabilities) {
     const key=row.place+':'+row.universe_id, existing=combined.get(key)??{...row,p:0};
     existing.p+=row.p/configs.length;combined.set(key,existing);
+  }
+  return finalize([...combined.values()]);
+}
+
+/** Feature-driven models regularized toward the independently built v2 ensemble. */
+export function enhancedForecast(input:Snapshot[],task:Task):Forecast {
+  const base={...DYNAMICS,memory:24,noise:0.8,samples:24000,
+    growth:0.6,audience:0.2,burnout:0.5,trending:0.15};
+  const components=[
+    {weight:0.3,value:dynamicForecast(input,task,{...base,growth:0.8})},
+    {weight:0.25,value:dynamicForecast(input,task,{...base,learned:0.5,ridge:0.02})},
+    {weight:0.25,value:dynamicForecast(input,task,{...base,learned:0.5,ridge:0.1})},
+    {weight:0.2,value:forecast(input,task)},
+  ];
+  const combined=new Map<string,Forecast['probabilities'][number]>();
+  for(const c of components) for(const row of c.value.probabilities) {
+    const key=row.place+':'+row.universe_id,existing=combined.get(key)??{...row,p:0};
+    existing.p+=row.p*c.weight;combined.set(key,existing);
   }
   return finalize([...combined.values()]);
 }

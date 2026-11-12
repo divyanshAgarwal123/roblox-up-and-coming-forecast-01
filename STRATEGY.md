@@ -15,8 +15,12 @@ strictly before the cutoff. Patterns are matched to forecast horizon and
 weighted by recency and time exposure. Their unseen games occupy positions in
 the simulated future chart; current games fill the remaining positions.
 
-Four equally weighted components span 18, 36 and 60-hour trend memories and two
-noise scales. Each runs 24,000 seeded simulations over the full forecast window.
+Version 3 combines relative player growth, audience residuals, Top Trending
+context and continuous top-three tenure with rank momentum. Two regularized
+regressions fit log-rank drift on historical pairs strictly before the cutoff.
+The learned models are shrunk toward a direct feature model; the previous
+four-component ensemble retains a 20% weight. This requires 168,000 seeded
+simulations over the full forecast window.
 A diffuse floor smooths simulation error. Output probabilities are capped to
 respect both each place's budget and each game's total membership probability.
 
@@ -27,7 +31,7 @@ deterministically to at most 160 observations spanning the supplied period.
 
 The old analogue model remains in forecast.ts for the reproducible comparisons
 in validate.mjs; main.ts executes the new simulation ensemble in dynamics.ts.
-The four overlapping development windows informed model choices and are not
+The eight overlapping development windows informed model choices and are not
 independent validation. The server reruns the program on the final pre-deadline
 history. Final results, house-baseline eligibility and any prize remain unknown
 until the actual future chart is scored.
